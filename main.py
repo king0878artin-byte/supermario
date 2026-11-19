@@ -1,439 +1,630 @@
 
+import os
+import random
+
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.core.window import Window
 from kivy.metrics import dp
+from kivy.storage.jsonstore import JsonStore
 from kivy.uix.widget import Widget
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
-from kivy.graphics import Color, Rectangle, Ellipse
+from kivy.graphics import (
+    Color, Rectangle, Ellipse, Line, RoundedRectangle
+)
 
-Window.clearcolor = (0.35, 0.72, 1, 1)
 
+class MarioGame(Widget):
+    WORLD = 3000
+    PLAYER_W = 38
+    NORMAL_H = 70
 
-class Game(Widget):
-    def __init__(self, **kwargs):
+    def __init__(self, store, **kwargs):
         super().__init__(**kwargs)
 
-        self.world_width = 2800
-        self.player_x = 80
-        self.player_y = 70
-        self.player_w = 36
-        self.player_h = 52
+        self.store = store
+        self.best_score = store.get("record")["score"] if store.exists("record") else 0
 
-        self.vy = 0
-        self.speed = 260
-        self.gravity = 1050
-        self.jump_power = 520
-        self.grounded = True
+        self.gravity = -1450
+        self.speed = 320
+        self.jump_power = 640
 
-        self.left = False
-        self.right = False
-        self.camera = 0
+        self.left_pressed = False
+        self.right_pressed = False
 
-        self.score = 0
-        self.lives = 3
-        self.finished = False
-        self.message = "به خط پایان برس!"
-
-        self.platforms = [
-            (0, 0, 700, 70),
-            (780, 0, 500, 70),
-            (1380, 0, 500, 70),
-            (1980, 0, 820, 70),
-            (350, 145, 130, 22),
-            (570, 220, 130, 22),
-            (900, 150, 150, 22),
-            (1150, 235, 140, 22),
-            (1500, 160, 150, 22),
-            (1750, 240, 150, 22),
-            (2150, 170, 150, 22),
-        ]
-
-        self.initial_coins = [
-            [390, 185], [610, 260], [950, 195],
-            [1200, 275], [1550, 205], [1800, 280],
-            [2200, 215], [2400, 110]
-        ]
-
-        self.coins = [c[:] for c in self.initial_coins]
-
-        self.enemy_x = 850
-        self.enemy_dir = 1
-        self.enemy_alive = True
-
-        self.bind(pos=self.draw, size=self.draw)
+        self.reset_game()
         Clock.schedule_interval(self.update, 1 / 60)
 
-    def move_left(self, value):
-        self.left = value
+    def reset_game(self):
+        self.x_player = 90
+        self.y_player = 75
+        self.vy = 0
+        self.grounded = True
 
-    def move_right(self, value):
-        self.right = value
+        self.camera = 0
+        self.score = 0
+        self.lives = 3
+
+        self.big = False
+        self.star_time = 0
+        self.invincible_time = 0
+
+        self.finished = False
+        self.game_over = False
+
+        self.coins = [
+            [340, 205], [390, 205], [570, 305],
+            [900, 215], [1120, 325], [1500, 225],
+            [1750, 325], [2150, 215], [2400, 315],
+            [2700, 120]
+        ]
+
+        self.platforms = [
+            (0, 0, 650, 75),
+            (760, 0, 520, 75),
+            (1380, 0, 510, 75),
+            (1990, 0, 1010, 75),
+
+            (300, 160, 140, 25),
+            (520, 260, 150, 25),
+            (850, 170, 150, 25),
+            (1080, 280, 150, 25),
+            (1450, 180, 150, 25),
+            (1700, 280, 150, 25),
+            (2100, 170, 150, 25),
+            (2350, 270, 150, 25),
+        ]
+
+        # جعبه‌های شانس
+        self.blocks = [
+            [350, 240, "coin", False],
+            [550, 340, "mushroom", False],
+            [920, 250, "coin", False],
+            [1150, 360, "star", False],
+            [1520, 260, "mushroom", False],
+            [1780, 360, "coin", False],
+            [2170, 250, "star", False],
+            [2420, 350, "mushroom", False],
+        ]
+
+        self.items = []
+
+        self.enemies = [
+            [1000, 75, 1, True],
+            [1650, 75, -1, True],
+            [2250, 75, 1, True]
+        ]
+
+        self.mushroom = []
+
+    def add_score(self, amount):
+        self.score += amount
+
+        if self.score > self.best_score:
+            self.best_score = self.score
+            self.store.put("record", score=self.best_score)
+
+    def restart(self):
+        self.reset_game()
 
     def jump(self):
-        if self.grounded and not self.finished:
+        if self.grounded and not self.finished and not self.game_over:
             self.vy = self.jump_power
             self.grounded = False
 
-    def update_score(self):
-        if hasattr(self, "score_callback"):
-            self.score_callback(self.score, self.lives)
-
-    def end_game(self, message):
-        self.finished = True
-        self.message = message
-
-        if hasattr(self, "end_callback"):
-            self.end_callback(message)
+    def player_height(self):
+        return 95 if self.big else self.NORMAL_H
 
     def lose_life(self):
+        if self.invincible_time > 0:
+            return
+
         self.lives -= 1
+        self.invincible_time = 1.5
 
         if self.lives <= 0:
-            self.end_game("بازی تمام شد!")
+            self.game_over = True
+            self.finished = True
         else:
-            self.player_x = max(80, self.player_x - 150)
-            self.player_y = 70
+            self.x_player = max(80, self.x_player - 180)
+            self.y_player = 75
             self.vy = 0
             self.grounded = True
+            self.big = False
 
-        self.update_score()
+    def hit_block(self, block):
+        if block[3]:
+            return
 
-    def restart(self):
-        self.player_x = 80
-        self.player_y = 70
-        self.vy = 0
-        self.camera = 0
+        block[3] = True
 
-        self.score = 0
-        self.lives = 3
-        self.finished = False
-        self.enemy_alive = True
-        self.enemy_x = 850
-        self.enemy_dir = 1
+        if block[2] == "coin":
+            self.add_score(100)
+            self.coins.append([block[0] + 12, block[1] + 55])
 
-        self.coins = [c[:] for c in self.initial_coins]
+        elif block[2] == "mushroom":
+            self.items.append([
+                block[0] + 5,
+                block[1] + 45,
+                "mushroom"
+            ])
 
-        self.grounded = True
-        self.left = False
-        self.right = False
-        self.message = "به خط پایان برس!"
-
-        self.update_score()
-
-        if hasattr(self, "end_callback"):
-            self.end_callback(self.message)
-
-        self.draw()
+        elif block[2] == "star":
+            self.items.append([
+                block[0] + 5,
+                block[1] + 45,
+                "star"
+            ])
 
     def update(self, dt):
-        if self.finished or self.width <= 0:
-            return
-
-        dt = min(dt, 0.04)
-
-        if self.left:
-            self.player_x -= self.speed * dt
-
-        if self.right:
-            self.player_x += self.speed * dt
-
-        self.player_x = max(
-            0,
-            min(self.player_x, self.world_width - self.player_w)
-        )
-
-        old_y = self.player_y
-
-        self.vy -= self.gravity * dt
-        self.player_y += self.vy * dt
-        self.grounded = False
-
-        # برخورد با سکو هنگام پایین آمدن
-        if self.vy <= 0:
-            for px, py, pw, ph in self.platforms:
-                horizontal = (
-                    self.player_x + self.player_w > px
-                    and self.player_x < px + pw
-                )
-
-                crossed = (
-                    old_y >= py + ph
-                    and self.player_y <= py + ph
-                )
-
-                if horizontal and crossed:
-                    self.player_y = py + ph
-                    self.vy = 0
-                    self.grounded = True
-                    break
-
-        # سقوط
-        if self.player_y < -100:
-            self.lose_life()
-            self.draw()
-            return
-
-        # جمع‌آوری سکه
-        for coin in self.coins[:]:
-            cx, cy = coin
-
-            if (
-                abs(self.player_x + self.player_w / 2 - cx) < 28
-                and abs(self.player_y + self.player_h / 2 - cy) < 35
-            ):
-                self.coins.remove(coin)
-                self.score += 10
-                self.update_score()
-
-        # حرکت دشمن
-        if self.enemy_alive:
-            self.enemy_x += self.enemy_dir * 100 * dt
-
-            if self.enemy_x > 1100 or self.enemy_x < 800:
-                self.enemy_dir *= -1
-
-            hit = (
-                self.player_x + self.player_w > self.enemy_x
-                and self.player_x < self.enemy_x + 42
-                and self.player_y + self.player_h > 70
-                and self.player_y < 108
-            )
-
-            if hit:
-                if self.vy < 0 and old_y >= 108:
-                    self.enemy_alive = False
-                    self.vy = self.jump_power * 0.55
-                else:
-                    self.lose_life()
-
-                    if self.finished:
-                        self.draw()
-                        return
-
-        # دوربین
-        target = self.player_x - self.width * .35
-
-        self.camera = max(
-            0,
-            min(target, self.world_width - self.width)
-        )
-
-        # پایان مرحله
-        if self.player_x >= self.world_width - 100:
-            self.end_game("مرحله را بردی!")
-
-        self.draw()
-
-    def draw(self, *args):
-        self.canvas.clear()
-
         if self.width <= 0 or self.height <= 0:
             return
 
-        floor_y = self.y + dp(125)
+        dt = min(dt, 0.033)
+
+        if not self.finished:
+            self.invincible_time = max(0, self.invincible_time - dt)
+            self.star_time = max(0, self.star_time - dt)
+
+            old_y = self.y_player
+            old_top = old_y + self.player_height()
+
+            if self.left_pressed:
+                self.x_player -= self.speed * dt
+
+            if self.right_pressed:
+                self.x_player += self.speed * dt
+
+            self.x_player = max(
+                0, min(self.WORLD - self.PLAYER_W, self.x_player)
+            )
+
+            self.vy += self.gravity * dt
+            self.y_player += self.vy * dt
+
+            self.grounded = False
+            height = self.player_height()
+
+            # برخورد با سکوها
+            for px, py, pw, ph in self.platforms:
+                if (
+                    self.x_player + self.PLAYER_W > px
+                    and self.x_player < px + pw
+                    and self.vy <= 0
+                    and old_y >= py + ph - 5
+                    and self.y_player <= py + ph
+                ):
+                    self.y_player = py + ph
+                    self.vy = 0
+                    self.grounded = True
+
+            # برخورد با جعبه شانس از پایین
+            new_top = self.y_player + height
+
+            if self.vy > 0:
+                for block in self.blocks:
+                    bx, by, kind, used = block
+
+                    if (
+                        not used
+                        and self.x_player + self.PLAYER_W > bx
+                        and self.x_player < bx + 42
+                        and old_top <= by + 42
+                        and new_top >= by
+                    ):
+                        self.y_player = by - height
+                        self.vy = -80
+                        self.hit_block(block)
+                        break
+
+            # دشمن‌ها
+            for enemy in self.enemies:
+                ex, ey, direction, alive = enemy
+
+                if not alive:
+                    continue
+
+                enemy[0] += direction * 95 * dt
+
+                if enemy[0] > 1150 or enemy[0] < 900:
+                    enemy[2] *= -1
+
+                horizontal = (
+                    self.x_player + self.PLAYER_W > ex
+                    and self.x_player < ex + 40
+                )
+
+                vertical = (
+                    self.y_player < ey + 38
+                    and self.y_player + height > ey
+                )
+
+                if horizontal and vertical:
+                    if self.star_time > 0:
+                        enemy[3] = False
+                        self.add_score(200)
+
+                    elif self.vy < 0 and old_y >= ey + 25:
+                        enemy[3] = False
+                        self.vy = 360
+                        self.add_score(200)
+
+                    else:
+                        self.lose_life()
+
+            # قارچ‌ها و ستاره‌ها
+            remaining_items = []
+
+            for item in self.items:
+                ix, iy, kind = item
+
+                if kind == "mushroom":
+                    item[0] += 75 * dt
+
+                close_x = abs(self.x_player + 19 - ix) < 35
+                close_y = abs(self.y_player + height / 2 - iy) < 45
+
+                if close_x and close_y:
+                    if kind == "mushroom":
+                        self.big = True
+                        self.add_score(500)
+                    else:
+                        self.star_time = 8
+                        self.add_score(1000)
+                else:
+                    remaining_items.append(item)
+
+            self.items = remaining_items
+
+            # جمع کردن سکه‌ها
+            remaining_coins = []
+
+            for coin in self.coins:
+                cx, cy = coin
+
+                if (
+                    abs(self.x_player + 19 - cx) < 30
+                    and abs(self.y_player + height / 2 - cy) < 40
+                ):
+                    self.add_score(100)
+                else:
+                    remaining_coins.append(coin)
+
+            self.coins = remaining_coins
+
+            # سقوط
+            if self.y_player < -150:
+                self.lose_life()
+
+            # پایان مرحله
+            if self.x_player > 2880:
+                self.finished = True
+
+            self.camera = max(
+                0,
+                min(self.WORLD - self.width,
+                    self.x_player - self.width * 0.38)
+            )
+
+        self.draw_game()
+
+    def draw_game(self):
+        self.canvas.clear()
+
+        cam = self.camera
+        w = self.width
 
         with self.canvas:
             # آسمان
-            Color(.35, .72, 1, 1)
+            Color(0.35, 0.72, 0.98, 1)
             Rectangle(pos=self.pos, size=self.size)
 
             # ابرها
-            Color(1, 1, 1, 1)
+            for cx, cy in [(180, 430), (700, 500), (1300, 420),
+                           (1900, 490), (2450, 430)]:
+                sx = self.x + cx - cam * 0.35
 
-            for x in (150, 550, 950, 1400, 1900, 2400):
-                sx = self.x + x - self.camera * .45
-
-                Ellipse(
-                    pos=(sx, self.y + self.height * .75),
-                    size=(dp(90), dp(32))
-                )
+                Color(1, 1, 1, 0.95)
+                Ellipse(pos=(sx, self.y + cy), size=(75, 35))
+                Ellipse(pos=(sx + 25, self.y + cy + 12), size=(55, 42))
+                Ellipse(pos=(sx + 50, self.y + cy), size=(60, 30))
 
             # تپه‌ها
-            Color(.25, .65, .30, 1)
+            Color(0.2, 0.68, 0.28, 1)
 
-            for x in (250, 850, 1500, 2150):
-                sx = self.x + x - self.camera * .7
-
+            for hx in range(0, self.WORLD, 350):
                 Ellipse(
-                    pos=(sx, floor_y),
-                    size=(dp(230), dp(150))
+                    pos=(self.x + hx - cam * 0.65, self.y + 35),
+                    size=(250, 150)
                 )
 
             # سکوها
             for px, py, pw, ph in self.platforms:
-                sx = self.x + px - self.camera
-                sy = floor_y + dp(py)
+                sx = self.x + px - cam
+                sy = self.y + py
 
-                if sx + dp(pw) < self.x or sx > self.right:
+                if sx + pw < self.x or sx > self.x + w:
                     continue
 
-                Color(.48, .25, .10, 1)
-                Rectangle(
-                    pos=(sx, sy),
-                    size=(dp(pw), dp(ph))
-                )
+                Color(0.62, 0.30, 0.12, 1)
+                Rectangle(pos=(sx, sy), size=(pw, ph))
 
-                Color(.25, .75, .18, 1)
-                Rectangle(
-                    pos=(sx, sy + dp(ph) - dp(6)),
-                    size=(dp(pw), dp(6))
-                )
+                Color(0.18, 0.72, 0.18, 1)
+                Rectangle(pos=(sx, sy + ph - 10), size=(pw, 10))
+
+                Color(0.35, 0.15, 0.06, 1)
+                for bx in range(int(sx), int(sx + pw), 45):
+                    Line(points=[bx, sy + 3, bx, sy + ph - 10], width=1)
+
+            # لوله‌ها
+            for pipe_x in [650, 1285, 1895, 2540]:
+                sx = self.x + pipe_x - cam
+
+                if -100 < sx - self.x < w + 100:
+                    Color(0.04, 0.48, 0.12, 1)
+                    Rectangle(pos=(sx, self.y + 75), size=(65, 100))
+
+                    Color(0.12, 0.75, 0.2, 1)
+                    Rectangle(pos=(sx - 8, self.y + 160), size=(81, 20))
+
+                    Color(0.02, 0.32, 0.07, 1)
+                    Line(rectangle=(sx, self.y + 75, 65, 100), width=2)
+
+            # جعبه‌های شانس
+            for bx, by, kind, used in self.blocks:
+                sx = self.x + bx - cam
+                sy = self.y + by
+
+                if sx < self.x - 60 or sx > self.x + w + 60:
+                    continue
+
+                if used:
+                    Color(0.48, 0.28, 0.12, 1)
+                else:
+                    Color(1, 0.62, 0.08, 1)
+
+                Rectangle(pos=(sx, sy), size=(42, 42))
+
+                Color(0.95, 0.85, 0.35, 1)
+                Line(rectangle=(sx, sy, 42, 42), width=2)
+
+                if not used:
+                    Color(1, 1, 1, 1)
+                    # علامت سؤال با خطوط
+                    Line(points=[
+                        sx + 13, sy + 27,
+                        sx + 16, sy + 32,
+                        sx + 25, sy + 32,
+                        sx + 29, sy + 27,
+                        sx + 25, sy + 22,
+                        sx + 21, sy + 18,
+                        sx + 21, sy + 13
+                    ], width=2.5)
+                    Ellipse(pos=(sx + 19, sy + 5), size=(5, 5))
 
             # سکه‌ها
             for cx, cy in self.coins:
-                sx = self.x + cx - self.camera
-                sy = floor_y + dp(cy)
+                sx = self.x + cx - cam
+                sy = self.y + cy
 
-                Color(1, .78, .05, 1)
-                Ellipse(
-                    pos=(sx, sy),
-                    size=(dp(22), dp(22))
-                )
+                Color(1, 0.78, 0.05, 1)
+                Ellipse(pos=(sx, sy), size=(24, 32))
 
-                Color(1, 1, .65, 1)
-                Ellipse(
-                    pos=(sx + dp(6), sy + dp(5)),
-                    size=(dp(5), dp(10))
-                )
+                Color(1, 0.95, 0.55, 1)
+                Ellipse(pos=(sx + 7, sy + 5), size=(7, 22))
 
-            # دشمن
-            if self.enemy_alive:
-                ex = self.x + self.enemy_x - self.camera
-                ey = floor_y + dp(70)
+            # آیتم‌های جایزه
+            for ix, iy, kind in self.items:
+                sx = self.x + ix - cam
+                sy = self.y + iy
 
-                Color(.65, .20, .12, 1)
-                Ellipse(
-                    pos=(ex, ey),
-                    size=(dp(42), dp(38))
-                )
+                if kind == "mushroom":
+                    Color(0.95, 0.15, 0.12, 1)
+                    Ellipse(pos=(sx, sy + 10), size=(38, 27))
+                    Color(1, 1, 1, 1)
+                    Ellipse(pos=(sx + 8, sy + 22), size=(8, 8))
+                    Ellipse(pos=(sx + 23, sy + 22), size=(8, 8))
+                    Color(1, 0.85, 0.65, 1)
+                    Rectangle(pos=(sx + 8, sy), size=(22, 15))
+                else:
+                    Color(1, 0.85, 0.05, 1)
+                    Ellipse(pos=(sx, sy), size=(38, 38))
+                    Color(1, 1, 1, 1)
+                    Line(points=[
+                        sx + 19, sy + 32,
+                        sx + 24, sy + 22,
+                        sx + 35, sy + 20,
+                        sx + 27, sy + 13,
+                        sx + 29, sy + 3,
+                        sx + 19, sy + 9,
+                        sx + 9, sy + 3,
+                        sx + 11, sy + 13,
+                        sx + 3, sy + 20,
+                        sx + 14, sy + 22,
+                        sx + 19, sy + 32
+                    ], width=2)
+
+            # دشمن‌ها
+            for ex, ey, direction, alive in self.enemies:
+                if not alive:
+                    continue
+
+                sx = self.x + ex - cam
+                sy = self.y + ey
+
+                Color(0.55, 0.18, 0.12, 1)
+                Ellipse(pos=(sx, sy), size=(40, 35))
 
                 Color(1, 1, 1, 1)
-                Ellipse(
-                    pos=(ex + dp(9), ey + dp(20)),
-                    size=(dp(8), dp(8))
-                )
+                Ellipse(pos=(sx + 7, sy + 18), size=(9, 10))
+                Ellipse(pos=(sx + 24, sy + 18), size=(9, 10))
+
+                Color(0, 0, 0, 1)
+                Ellipse(pos=(sx + 10, sy + 21), size=(4, 5))
+                Ellipse(pos=(sx + 27, sy + 21), size=(4, 5))
 
             # شخصیت اصلی اختصاصی
-            px = self.x + self.player_x - self.camera
-            py = floor_y + dp(self.player_y)
+            px = self.x + self.x_player - cam
+            py = self.y + self.y_player
+            ph = self.player_height()
 
-            Color(.05, .25, .9, 1)
-            Rectangle(
-                pos=(px, py),
-                size=(dp(36), dp(52))
+            if self.star_time > 0:
+                Color(1, 0.9, 0.1, 0.45)
+                Ellipse(pos=(px - 12, py - 8), size=(65, ph + 25))
+
+            # کفش
+            Color(0.25, 0.09, 0.04, 1)
+            RoundedRectangle(pos=(px - 3, py), size=(19, 11), radius=[4])
+            RoundedRectangle(pos=(px + 21, py), size=(19, 11), radius=[4])
+
+            # شلوار
+            Color(0.05, 0.25, 0.85, 1)
+            Rectangle(pos=(px + 4, py + 10), size=(31, ph * 0.30))
+
+            # لباس
+            Color(0.9, 0.12, 0.08, 1)
+            Rectangle(pos=(px + 2, py + ph * 0.38), size=(35, ph * 0.27))
+
+            # سر
+            Color(1, 0.72, 0.48, 1)
+            Ellipse(pos=(px + 5, py + ph * 0.65), size=(30, 28))
+
+            # مو
+            Color(0.22, 0.10, 0.04, 1)
+            Rectangle(pos=(px + 5, py + ph * 0.65 + 21), size=(30, 7))
+
+            # کلاه
+            Color(0.12, 0.35, 0.85, 1)
+            RoundedRectangle(
+                pos=(px + 1, py + ph * 0.65 + 23),
+                size=(37, 10),
+                radius=[4]
             )
 
-            Color(1, .72, .48, 1)
-            Rectangle(
-                pos=(px + dp(7), py + dp(27)),
-                size=(dp(23), dp(18))
-            )
+            # چشم
+            Color(1, 1, 1, 1)
+            Ellipse(pos=(px + 23, py + ph * 0.65 + 8), size=(6, 9))
 
-            Color(.85, .12, .10, 1)
-            Rectangle(
-                pos=(px - dp(3), py + dp(44)),
-                size=(dp(42), dp(10))
-            )
+            Color(0.05, 0.05, 0.05, 1)
+            Ellipse(pos=(px + 26, py + ph * 0.65 + 10), size=(3, 5))
 
-            Color(.18, .08, .04, 1)
-            Rectangle(
-                pos=(px, py),
-                size=(dp(17), dp(7))
-            )
+            # پرچم پایان
+            gx = self.x + 2920 - cam
+            Color(0.25, 0.2, 0.15, 1)
+            Rectangle(pos=(gx, self.y + 75), size=(6, 220))
 
-            Rectangle(
-                pos=(px + dp(20), py),
-                size=(dp(17), dp(7))
-            )
+            Color(1, 0.85, 0.1, 1)
+            Rectangle(pos=(gx + 6, self.y + 255), size=(55, 30))
 
 
 class SuperMarioApp(App):
     def build(self):
         root = FloatLayout()
 
-        self.game = Game()
+        score_path = os.path.join(self.user_data_dir, "scores.json")
+        self.store = JsonStore(score_path)
+
+        self.game = MarioGame(
+            self.store,
+            size_hint=(1, 1)
+        )
         root.add_widget(self.game)
 
-        self.score_label = Label(
-            text="امتیاز: 0 | جان: 3",
-            size_hint=(1, None),
-            height=dp(45),
-            pos_hint={"top": 1},
-            font_size="20sp",
-            bold=True,
-            color=(1, 1, 1, 1)
-        )
-        root.add_widget(self.score_label)
+        def make_button(text, x, width, color):
+            btn = Button(
+                text=text,
+                font_size=dp(27),
+                size_hint=(width, 0.14),
+                pos_hint={"x": x, "y": 0.03},
+                background_normal="",
+                background_color=color
+            )
+            return btn
 
-        self.message = Label(
-            text="به خط پایان برس!",
-            size_hint=(1, None),
-            height=dp(35),
-            pos_hint={"center_x": .5, "y": .13},
-            font_size="16sp",
-            color=(1, 1, 1, 1)
+        left = make_button(
+            "◀", 0.02, 0.15, (0.05, 0.15, 0.4, 0.85)
         )
-        root.add_widget(self.message)
-
-        left = Button(
-            text="◀",
-            size_hint=(.19, .12),
-            pos_hint={"x": .02, "y": .015},
-            font_size="25sp"
-        )
-
         left.bind(
-            on_press=lambda *_: self.game.move_left(True),
-            on_release=lambda *_: self.game.move_left(False)
+            on_press=lambda *_: setattr(self.game, "left_pressed", True)
+        )
+        left.bind(
+            on_release=lambda *_: setattr(self.game, "left_pressed", False)
         )
         root.add_widget(left)
 
-        right = Button(
-            text="▶",
-            size_hint=(.19, .12),
-            pos_hint={"x": .23, "y": .015},
-            font_size="25sp"
+        right = make_button(
+            "▶", 0.19, 0.15, (0.05, 0.15, 0.4, 0.85)
         )
-
         right.bind(
-            on_press=lambda *_: self.game.move_right(True),
-            on_release=lambda *_: self.game.move_right(False)
+            on_press=lambda *_: setattr(self.game, "right_pressed", True)
+        )
+        right.bind(
+            on_release=lambda *_: setattr(self.game, "right_pressed", False)
         )
         root.add_widget(right)
 
-        jump = Button(
-            text="پرش",
-            size_hint=(.22, .12),
-            pos_hint={"right": .98, "y": .015},
-            font_size="20sp"
+        jump = make_button(
+            "پرش", 0.78, 0.19, (0.1, 0.55, 0.2, 0.9)
         )
-
         jump.bind(on_press=lambda *_: self.game.jump())
         root.add_widget(jump)
 
+        self.info = Label(
+            text="",
+            font_size=dp(17),
+            bold=True,
+            color=(1, 1, 1, 1),
+            size_hint=(0.62, 0.09),
+            pos_hint={"x": 0.19, "top": 0.99}
+        )
+        root.add_widget(self.info)
+
+        self.message = Label(
+            text="",
+            font_size=dp(25),
+            bold=True,
+            color=(1, 1, 1, 1),
+            size_hint=(0.6, 0.14),
+            pos_hint={"center_x": 0.5, "center_y": 0.56}
+        )
+        root.add_widget(self.message)
+
         restart = Button(
             text="شروع دوباره",
-            size_hint=(.25, .07),
-            pos_hint={"center_x": .5, "y": .025},
-            font_size="14sp"
+            font_size=dp(15),
+            size_hint=(0.17, 0.08),
+            pos_hint={"right": 0.98, "top": 0.98},
+            background_normal="",
+            background_color=(0.1, 0.2, 0.5, 0.85)
         )
-
-        restart.bind(on_press=lambda *_: self.game.restart())
+        restart.bind(on_press=lambda *_: self.restart_game())
         root.add_widget(restart)
 
-        self.game.score_callback = self.update_score
-        self.game.end_callback = self.update_message
-
+        Clock.schedule_interval(self.update_ui, 0.1)
         return root
 
-    def update_score(self, score, lives):
-        self.score_label.text = f"امتیاز: {score} | جان: {lives}"
+    def restart_game(self):
+        self.game.restart()
+        self.message.text = ""
 
-    def update_message(self, message):
-        self.message.text = message
+    def update_ui(self, dt):
+        g = self.game
+
+        self.info.text = (
+            f"امتیاز: {g.score}     "
+            f"بهترین: {g.best_score}     "
+            f"جان: {g.lives}"
+        )
+
+        if g.finished:
+            if g.game_over:
+                self.message.text = "GAME OVER"
+            else:
+                self.message.text = "YOU WIN!"
+
+    def on_stop(self):
+        self.store.put("record", score=self.game.best_score)
 
 
 if __name__ == "__main__":
