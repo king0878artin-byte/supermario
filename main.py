@@ -76,7 +76,6 @@ class MarioGame(Widget):
             (2350, 270, 150, 25),
         ]
 
-        # جعبه‌های شانس
         self.blocks = [
             [350, 240, "coin", False],
             [550, 340, "mushroom", False],
@@ -186,7 +185,6 @@ class MarioGame(Widget):
             self.grounded = False
             height = self.player_height()
 
-            # برخورد با سکوها
             for px, py, pw, ph in self.platforms:
                 if (
                     self.x_player + self.PLAYER_W > px
@@ -199,7 +197,6 @@ class MarioGame(Widget):
                     self.vy = 0
                     self.grounded = True
 
-            # برخورد با جعبه شانس از پایین
             new_top = self.y_player + height
 
             if self.vy > 0:
@@ -218,7 +215,6 @@ class MarioGame(Widget):
                         self.hit_block(block)
                         break
 
-            # دشمن‌ها
             for enemy in self.enemies:
                 ex, ey, direction, alive = enemy
 
@@ -253,7 +249,6 @@ class MarioGame(Widget):
                     else:
                         self.lose_life()
 
-            # قارچ‌ها و ستاره‌ها
             remaining_items = []
 
             for item in self.items:
@@ -277,7 +272,6 @@ class MarioGame(Widget):
 
             self.items = remaining_items
 
-            # جمع کردن سکه‌ها
             remaining_coins = []
 
             for coin in self.coins:
@@ -293,11 +287,9 @@ class MarioGame(Widget):
 
             self.coins = remaining_coins
 
-            # سقوط
             if self.y_player < -150:
                 self.lose_life()
 
-            # پایان مرحله
             if self.x_player > 2880:
                 self.finished = True
 
@@ -316,11 +308,9 @@ class MarioGame(Widget):
         w = self.width
 
         with self.canvas:
-            # آسمان
             Color(0.35, 0.72, 0.98, 1)
             Rectangle(pos=self.pos, size=self.size)
 
-            # ابرها
             for cx, cy in [(180, 430), (700, 500), (1300, 420),
                            (1900, 490), (2450, 430)]:
                 sx = self.x + cx - cam * 0.35
@@ -330,7 +320,6 @@ class MarioGame(Widget):
                 Ellipse(pos=(sx + 25, self.y + cy + 12), size=(55, 42))
                 Ellipse(pos=(sx + 50, self.y + cy), size=(60, 30))
 
-            # تپه‌ها
             Color(0.2, 0.68, 0.28, 1)
 
             for hx in range(0, self.WORLD, 350):
@@ -339,7 +328,6 @@ class MarioGame(Widget):
                     size=(250, 150)
                 )
 
-            # سکوها
             for px, py, pw, ph in self.platforms:
                 sx = self.x + px - cam
                 sy = self.y + py
@@ -357,7 +345,6 @@ class MarioGame(Widget):
                 for bx in range(int(sx), int(sx + pw), 45):
                     Line(points=[bx, sy + 3, bx, sy + ph - 10], width=1)
 
-            # لوله‌ها
             for pipe_x in [650, 1285, 1895, 2540]:
                 sx = self.x + pipe_x - cam
 
@@ -371,7 +358,6 @@ class MarioGame(Widget):
                     Color(0.02, 0.32, 0.07, 1)
                     Line(rectangle=(sx, self.y + 75, 65, 100), width=2)
 
-            # جعبه‌های شانس
             for bx, by, kind, used in self.blocks:
                 sx = self.x + bx - cam
                 sy = self.y + by
@@ -391,7 +377,6 @@ class MarioGame(Widget):
 
                 if not used:
                     Color(1, 1, 1, 1)
-                    # علامت سؤال با خطوط
                     Line(points=[
                         sx + 13, sy + 27,
                         sx + 16, sy + 32,
@@ -403,7 +388,6 @@ class MarioGame(Widget):
                     ], width=2.5)
                     Ellipse(pos=(sx + 19, sy + 5), size=(5, 5))
 
-            # سکه‌ها
             for cx, cy in self.coins:
                 sx = self.x + cx - cam
                 sy = self.y + cy
@@ -414,7 +398,6 @@ class MarioGame(Widget):
                 Color(1, 0.95, 0.55, 1)
                 Ellipse(pos=(sx + 7, sy + 5), size=(7, 22))
 
-            # آیتم‌های جایزه
             for ix, iy, kind in self.items:
                 sx = self.x + ix - cam
                 sy = self.y + iy
@@ -445,7 +428,6 @@ class MarioGame(Widget):
                         sx + 19, sy + 32
                     ], width=2)
 
-            # دشمن‌ها
             for ex, ey, direction, alive in self.enemies:
                 if not alive:
                     continue
@@ -464,7 +446,6 @@ class MarioGame(Widget):
                 Ellipse(pos=(sx + 10, sy + 21), size=(4, 5))
                 Ellipse(pos=(sx + 27, sy + 21), size=(4, 5))
 
-            # شخصیت اصلی اختصاصی
             px = self.x + self.x_player - cam
             py = self.y + self.y_player
             ph = self.player_height()
@@ -473,28 +454,22 @@ class MarioGame(Widget):
                 Color(1, 0.9, 0.1, 0.45)
                 Ellipse(pos=(px - 12, py - 8), size=(65, ph + 25))
 
-            # کفش
             Color(0.25, 0.09, 0.04, 1)
             RoundedRectangle(pos=(px - 3, py), size=(19, 11), radius=[4])
             RoundedRectangle(pos=(px + 21, py), size=(19, 11), radius=[4])
 
-            # شلوار
             Color(0.05, 0.25, 0.85, 1)
             Rectangle(pos=(px + 4, py + 10), size=(31, ph * 0.30))
 
-            # لباس
             Color(0.9, 0.12, 0.08, 1)
             Rectangle(pos=(px + 2, py + ph * 0.38), size=(35, ph * 0.27))
 
-            # سر
             Color(1, 0.72, 0.48, 1)
             Ellipse(pos=(px + 5, py + ph * 0.65), size=(30, 28))
 
-            # مو
             Color(0.22, 0.10, 0.04, 1)
             Rectangle(pos=(px + 5, py + ph * 0.65 + 21), size=(30, 7))
 
-            # کلاه
             Color(0.12, 0.35, 0.85, 1)
             RoundedRectangle(
                 pos=(px + 1, py + ph * 0.65 + 23),
@@ -502,14 +477,12 @@ class MarioGame(Widget):
                 radius=[4]
             )
 
-            # چشم
             Color(1, 1, 1, 1)
             Ellipse(pos=(px + 23, py + ph * 0.65 + 8), size=(6, 9))
 
             Color(0.05, 0.05, 0.05, 1)
             Ellipse(pos=(px + 26, py + ph * 0.65 + 10), size=(3, 5))
 
-            # پرچم پایان
             gx = self.x + 2920 - cam
             Color(0.25, 0.2, 0.15, 1)
             Rectangle(pos=(gx, self.y + 75), size=(6, 220))
@@ -565,7 +538,7 @@ class SuperMarioApp(App):
         root.add_widget(right)
 
         jump = make_button(
-            "پرش", 0.78, 0.19, (0.1, 0.55, 0.2, 0.9)
+            "Jump", 0.78, 0.19, (0.1, 0.55, 0.2, 0.9)
         )
         jump.bind(on_press=lambda *_: self.game.jump())
         root.add_widget(jump)
@@ -591,7 +564,7 @@ class SuperMarioApp(App):
         root.add_widget(self.message)
 
         restart = Button(
-            text="شروع دوباره",
+            text="Restart",
             font_size=dp(15),
             size_hint=(0.17, 0.08),
             pos_hint={"right": 0.98, "top": 0.98},
@@ -612,9 +585,9 @@ class SuperMarioApp(App):
         g = self.game
 
         self.info.text = (
-            f"امتیاز: {g.score}     "
-            f"بهترین: {g.best_score}     "
-            f"جان: {g.lives}"
+            f"Score: {g.score}     "
+            f"Best: {g.best_score}     "
+            f"Lives: {g.lives}"
         )
 
         if g.finished:
