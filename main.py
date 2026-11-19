@@ -1,4 +1,3 @@
-
 import os
 import random
 
@@ -25,6 +24,12 @@ class MarioGame(Widget):
 
         self.store = store
         self.best_score = store.get("record")["score"] if store.exists("record") else 0
+        self.level = 1
+        self.unlocked_level = (
+            int(store.get("progress").get("unlocked", 1))
+            if store.exists("progress") else 1
+        )
+        self.unlocked_level = max(1, min(100, self.unlocked_level))
 
         self.gravity = -1450
         self.speed = 320
@@ -89,11 +94,24 @@ class MarioGame(Widget):
 
         self.items = []
 
-        self.enemies = [
-            [1000, 75, 1, True],
-            [1650, 75, -1, True],
-            [2250, 75, 1, True]
-        ]
+        enemy_spots = [1000, 1650, 2250, 430, 850, 1450, 2050, 2600, 2780]
+        enemy_count = min(3 + (self.level - 1) // 12, len(enemy_spots))
+        self.enemies = []
+
+        for index, enemy_x in enumerate(enemy_spots[:enemy_count]):
+            patrol_left = max(80, enemy_x - 85)
+            patrol_right = min(self.WORLD - 80, enemy_x + 85)
+            direction = 1 if index % 2 == 0 else -1
+            self.enemies.append([
+                enemy_x, 75, direction, True, patrol_left, patrol_right
+            ])
+
+        level_rng = random.Random(self.level)
+
+        for _ in range(min(2 + self.level // 10, 10)):
+            coin_x = level_rng.randint(250, 2750)
+            coin_y = level_rng.choice([125, 180, 220, 270, 310])
+            self.coins.append([coin_x, coin_y])
 
         self.mushroom = []
 
@@ -105,6 +123,10 @@ class MarioGame(Widget):
             self.store.put("record", score=self.best_score)
 
     def restart(self):
+        self.reset_game()
+
+    def load_level(self, level):
+        self.level = max(1, min(100, int(level)))
         self.reset_game()
 
     def jump(self):
@@ -216,14 +238,15 @@ class MarioGame(Widget):
                         break
 
             for enemy in self.enemies:
-                ex, ey, direction, alive = enemy
+                ex, ey, direction, alive, patrol_left, patrol_right = enemy
 
                 if not alive:
                     continue
 
-                enemy[0] += direction * 95 * dt
+                enemy_speed = 95 + min(self.level - 1, 40) * 2
+                enemy[0] += direction * enemy_speed * dt
 
-                if enemy[0] > 1150 or enemy[0] < 900:
+                if enemy[0] > patrol_right or enemy[0] < patrol_left:
                     enemy[2] *= -1
 
                 horizontal = (
@@ -428,7 +451,7 @@ class MarioGame(Widget):
                         sx + 19, sy + 32
                     ], width=2)
 
-            for ex, ey, direction, alive in self.enemies:
+            for ex, ey, direction, alive, patrol_left, patrol_right in self.enemies:
                 if not alive:
                     continue
 
@@ -549,7 +572,7 @@ class SuperMarioApp(App):
             bold=True,
             color=(1, 1, 1, 1),
             size_hint=(0.62, 0.09),
-            pos_hint={"x": 0.19, "top": 0.99}
+            pos_hint={"x": 0.19, "top": 0.89}
         )
         root.add_widget(self.info)
 
@@ -574,12 +597,56 @@ class SuperMarioApp(App):
         restart.bind(on_press=lambda *_: self.restart_game())
         root.add_widget(restart)
 
+        self.level_label = Label(
+            text="LEVEL 1 / 100",
+            font_size=dp(16),
+            bold=True,
+            color=(1, 1, 1, 0.8),
+            size_hint=(0.24, 0.07),
+            pos_hint={"center_x": 0.5, "top": 0.98}
+        )
+        root.add_widget(self.level_label)
+
+        self.previous_level_button = Button(
+            text="◀",
+            font_size=dp(19),
+            size_hint=(0.07, 0.065),
+            pos_hint={"right": 0.36, "top": 0.98},
+            background_normal="",
+            background_color=(0.08, 0.12, 0.25, 0.32),
+            color=(1, 1, 1, 0.55)
+        )
+        self.previous_level_button.bind(
+            on_press=lambda *_: self.change_level(-1)
+        )
+        root.add_widget(self.previous_level_button)
+
+        self.next_level_button = Button(
+            text="▶",
+            font_size=dp(19),
+            size_hint=(0.07, 0.065),
+            pos_hint={"x": 0.57, "top": 0.98},
+            background_normal="",
+            background_color=(0.08, 0.12, 0.25, 0.32),
+            color=(1, 1, 1, 0.55)
+        )
+        self.next_level_button.bind(
+            on_press=lambda *_: self.change_level(1)
+        )
+        root.add_widget(self.next_level_button)
+
         Clock.schedule_interval(self.update_ui, 0.1)
         return root
 
     def restart_game(self):
         self.game.restart()
         self.message.text = ""
+
+    def change_level(self, direction):
+        target = self.game.level + direction
+        if 1 <= target <= self.game.unlocked_level:
+            self.game.load_level(target)
+            self.message.text = ""
 
     def update_ui(self, dt):
         g = self.game
@@ -589,12 +656,29 @@ class SuperMarioApp(App):
             f"Best: {g.best_score}     "
             f"Lives: {g.lives}"
         )
+        self.level_label.text = f"LEVEL {g.level} / 100"
+
+        previous_available = g.level > 1
+        next_available = g.level < g.unlocked_level
+
+        self.previous_level_button.disabled = not previous_available
+        self.previous_level_button.opacity = 1 if previous_available else 0.45
+
+        self.next_level_button.disabled = not next_available
+        self.next_level_button.opacity = 1 if next_available else 0.45
 
         if g.finished:
             if g.game_over:
                 self.message.text = "GAME OVER"
             else:
-                self.message.text = "YOU WIN!"
+                if g.level < 100:
+                    self.message.text = "LEVEL COMPLETE!"
+
+                    if g.unlocked_level < g.level + 1:
+                        g.unlocked_level = g.level + 1
+                        self.store.put("progress", unlocked=g.unlocked_level)
+                else:
+                    self.message.text = "YOU WIN! ALL 100 LEVELS COMPLETE!"
 
     def on_stop(self):
         self.store.put("record", score=self.game.best_score)
