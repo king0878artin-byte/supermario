@@ -24,6 +24,10 @@ class MarioGame(Widget):
 
         self.store = store
         self.best_score = store.get("record")["score"] if store.exists("record") else 0
+        self.level_records = (
+            dict(store.get("level_records").get("levels", {}))
+            if store.exists("level_records") else {}
+        )
         self.level = 1
         self.unlocked_level = (
             int(store.get("progress").get("unlocked", 1))
@@ -57,6 +61,7 @@ class MarioGame(Widget):
 
         self.finished = False
         self.game_over = False
+        self.result_saved = False
 
         self.coins = [
             [340, 205], [390, 205], [570, 305],
@@ -121,6 +126,31 @@ class MarioGame(Widget):
         if self.score > self.best_score:
             self.best_score = self.score
             self.store.put("record", score=self.best_score)
+
+    def stars_for_score(self, score):
+        """Convert a completed level score into zero to three stars."""
+        if score >= 3000:
+            return 3
+        if score >= 1500:
+            return 2
+        if score >= 500:
+            return 1
+        return 0
+
+    def get_level_record(self, level):
+        return self.level_records.get(str(int(level)), {})
+
+    def save_level_result(self):
+        """Save a level result only when its score beats the previous best."""
+        key = str(self.level)
+        previous = self.level_records.get(key)
+        if previous is None or self.score > int(previous.get("score", -1)):
+            self.level_records[key] = {
+                "score": int(self.score),
+                "stars": self.stars_for_score(self.score)
+            }
+            self.store.put("level_records", levels=self.level_records)
+        return self.level_records.get(key, {})
 
     def restart(self):
         self.reset_game()
@@ -607,6 +637,16 @@ class SuperMarioApp(App):
         )
         root.add_widget(self.level_label)
 
+        self.level_stars_label = Label(
+            text="STARS: ☆☆☆",
+            font_size=dp(14),
+            bold=True,
+            color=(1, 0.9, 0.25, 1),
+            size_hint=(0.42, 0.05),
+            pos_hint={"center_x": 0.5, "top": 0.91}
+        )
+        root.add_widget(self.level_stars_label)
+
         self.previous_level_button = Button(
             text="◀",
             font_size=dp(19),
@@ -658,6 +698,12 @@ class SuperMarioApp(App):
         )
         self.level_label.text = f"LEVEL {g.level} / 100"
 
+        level_record = g.get_level_record(g.level)
+        saved_stars = max(0, min(3, int(level_record.get("stars", 0))))
+        saved_score = int(level_record.get("score", 0))
+        star_display = "★" * saved_stars + "☆" * (3 - saved_stars)
+        self.level_stars_label.text = f"STARS: {star_display}   BEST: {saved_score}"
+
         previous_available = g.level > 1
         next_available = g.level < g.unlocked_level
 
@@ -671,6 +717,10 @@ class SuperMarioApp(App):
             if g.game_over:
                 self.message.text = "GAME OVER"
             else:
+                if not g.result_saved:
+                    g.save_level_result()
+                    g.result_saved = True
+
                 if g.level < 100:
                     self.message.text = "LEVEL COMPLETE!"
 
