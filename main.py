@@ -473,8 +473,16 @@ class MarioGame(Widget):
         cam = self.camera
         w = self.width
 
+        sky_colors = [
+            (0.35, 0.72, 0.98), (0.95, 0.48, 0.30),
+            (0.08, 0.12, 0.28), (0.58, 0.82, 0.94)
+        ]
+        hill_colors = [
+            (0.20, 0.68, 0.28), (0.42, 0.28, 0.25),
+            (0.10, 0.22, 0.30), (0.68, 0.82, 0.76)
+        ]
         with self.canvas:
-            Color(0.35, 0.72, 0.98, 1)
+            Color(*sky_colors[self.theme], 1)
             Rectangle(pos=self.pos, size=self.size)
 
             for cx, cy in [(180, 430), (700, 500), (1300, 420),
@@ -486,7 +494,7 @@ class MarioGame(Widget):
                 Ellipse(pos=(sx + 25, self.y + cy + 12), size=(55, 42))
                 Ellipse(pos=(sx + 50, self.y + cy), size=(60, 30))
 
-            Color(0.2, 0.68, 0.28, 1)
+            Color(*hill_colors[self.theme], 1)
 
             for hx in range(0, self.WORLD, 350):
                 Ellipse(
@@ -699,137 +707,334 @@ class MarioGame(Widget):
 
 class SuperMarioApp(App):
     def build(self):
-        root = FloatLayout()
-
         score_path = os.path.join(self.user_data_dir, "scores.json")
         self.store = JsonStore(score_path)
+        self.sound_enabled = True
+        self.sounds = {}
+        self.music = None
+        self.prepare_audio()
 
-        self.game = MarioGame(
-            self.store,
-            size_hint=(1, 1)
-        )
+        root = FloatLayout()
+        self.game = MarioGame(self.store, size_hint=(1, 1))
+        self.game.sound_callback = self.play_sound
         root.add_widget(self.game)
 
-        def make_button(text, x, width, color):
-            btn = Button(
-                text=text,
-                font_size=dp(27),
-                size_hint=(width, 0.14),
-                pos_hint={"x": x, "y": 0.03},
-                background_normal="",
-                background_color=color
+        def make_button(text, x, width, color, y=0.03):
+            return Button(
+                text=text, font_size=dp(22),
+                size_hint=(width, 0.13), pos_hint={"x": x, "y": y},
+                background_normal="", background_color=color,
+                color=(1, 1, 1, 1), bold=True
             )
-            return btn
 
-        left = make_button(
-            "◀", 0.02, 0.15, (0.05, 0.15, 0.4, 0.85)
-        )
-        left.bind(
-            on_press=lambda *_: setattr(self.game, "left_pressed", True)
-        )
-        left.bind(
-            on_release=lambda *_: setattr(self.game, "left_pressed", False)
-        )
+        left = make_button("◀", 0.02, 0.15, (0.05, 0.15, 0.4, 0.88))
+        left.bind(on_press=lambda *_: setattr(self.game, "left_pressed", True))
+        left.bind(on_release=lambda *_: setattr(self.game, "left_pressed", False))
         root.add_widget(left)
 
-        right = make_button(
-            "▶", 0.19, 0.15, (0.05, 0.15, 0.4, 0.85)
-        )
-        right.bind(
-            on_press=lambda *_: setattr(self.game, "right_pressed", True)
-        )
-        right.bind(
-            on_release=lambda *_: setattr(self.game, "right_pressed", False)
-        )
+        right = make_button("▶", 0.19, 0.15, (0.05, 0.15, 0.4, 0.88))
+        right.bind(on_press=lambda *_: setattr(self.game, "right_pressed", True))
+        right.bind(on_release=lambda *_: setattr(self.game, "right_pressed", False))
         root.add_widget(right)
 
-        jump = make_button(
-            "Jump", 0.78, 0.19, (0.1, 0.55, 0.2, 0.9)
-        )
+        jump = make_button("JUMP", 0.78, 0.19, (0.1, 0.55, 0.2, 0.92))
         jump.bind(on_press=lambda *_: self.game.jump())
         root.add_widget(jump)
 
+        pipe = make_button("DOWN / PIPE", 0.58, 0.18, (0.05, 0.42, 0.42, 0.92), y=0.03)
+        pipe.font_size = dp(14)
+        pipe.bind(on_press=lambda *_: self.game.enter_pipe())
+        root.add_widget(pipe)
+
         self.info = Label(
-            text="",
-            font_size=dp(17),
-            bold=True,
-            color=(1, 1, 1, 1),
-            size_hint=(0.62, 0.09),
-            pos_hint={"x": 0.19, "top": 0.89}
+            text="", font_size=dp(17), bold=True, color=(1, 1, 1, 1),
+            size_hint=(0.62, 0.09), pos_hint={"x": 0.19, "top": 0.89}
         )
         root.add_widget(self.info)
 
         self.message = Label(
-            text="",
-            font_size=dp(25),
-            bold=True,
-            color=(1, 1, 1, 1),
-            size_hint=(0.6, 0.14),
-            pos_hint={"center_x": 0.5, "center_y": 0.56}
+            text="", font_size=dp(25), bold=True, color=(1, 1, 1, 1),
+            size_hint=(0.6, 0.14), pos_hint={"center_x": 0.5, "center_y": 0.56}
         )
         root.add_widget(self.message)
 
         restart = Button(
-            text="Restart",
-            font_size=dp(15),
-            size_hint=(0.17, 0.08),
+            text="Restart", font_size=dp(14), size_hint=(0.13, 0.07),
             pos_hint={"right": 0.98, "top": 0.98},
-            background_normal="",
-            background_color=(0.1, 0.2, 0.5, 0.85)
+            background_normal="", background_color=(0.1, 0.2, 0.5, 0.85)
         )
         restart.bind(on_press=lambda *_: self.restart_game())
         root.add_widget(restart)
 
         self.level_label = Label(
-            text="LEVEL 1 / 100",
-            font_size=dp(16),
-            bold=True,
-            color=(1, 1, 1, 0.8),
-            size_hint=(0.24, 0.07),
+            text="LEVEL 1 / 100", font_size=dp(16), bold=True,
+            color=(1, 1, 1, 0.8), size_hint=(0.24, 0.07),
             pos_hint={"center_x": 0.5, "top": 0.98}
         )
         root.add_widget(self.level_label)
 
         self.level_stars_label = Label(
-            text="STARS: ☆☆☆",
-            font_size=dp(14),
-            bold=True,
-            color=(1, 0.9, 0.25, 1),
-            size_hint=(0.42, 0.05),
+            text="STARS: ☆☆☆", font_size=dp(14), bold=True,
+            color=(1, 0.9, 0.25, 1), size_hint=(0.42, 0.05),
             pos_hint={"center_x": 0.5, "top": 0.91}
         )
         root.add_widget(self.level_stars_label)
 
         self.previous_level_button = Button(
-            text="◀",
-            font_size=dp(19),
-            size_hint=(0.07, 0.065),
+            text="◀", font_size=dp(19), size_hint=(0.07, 0.065),
             pos_hint={"right": 0.36, "top": 0.98},
-            background_normal="",
-            background_color=(0.08, 0.12, 0.25, 0.32),
+            background_normal="", background_color=(0.08, 0.12, 0.25, 0.32),
             color=(1, 1, 1, 0.55)
         )
-        self.previous_level_button.bind(
-            on_press=lambda *_: self.change_level(-1)
-        )
+        self.previous_level_button.bind(on_press=lambda *_: self.change_level(-1))
         root.add_widget(self.previous_level_button)
 
         self.next_level_button = Button(
-            text="▶",
-            font_size=dp(19),
-            size_hint=(0.07, 0.065),
+            text="▶", font_size=dp(19), size_hint=(0.07, 0.065),
             pos_hint={"x": 0.57, "top": 0.98},
-            background_normal="",
-            background_color=(0.08, 0.12, 0.25, 0.32),
+            background_normal="", background_color=(0.08, 0.12, 0.25, 0.32),
             color=(1, 1, 1, 0.55)
         )
-        self.next_level_button.bind(
-            on_press=lambda *_: self.change_level(1)
-        )
+        self.next_level_button.bind(on_press=lambda *_: self.change_level(1))
         root.add_widget(self.next_level_button)
+
+        menu_button = Button(
+            text="MENU", font_size=dp(13), size_hint=(0.13, 0.07),
+            pos_hint={"x": 0.02, "top": 0.98},
+            background_normal="", background_color=(0.08, 0.12, 0.25, 0.8)
+        )
+        menu_button.bind(on_press=lambda *_: self.show_main_menu())
+        root.add_widget(menu_button)
+
+        self.root_layout = root
+        self.menu_panel = self.make_panel()
+        root.add_widget(self.menu_panel)
+        self.build_main_menu()
+        self.level_panel = self.make_panel()
+        root.add_widget(self.level_panel)
+        self.build_level_select()
+        self.show_main_menu()
 
         Clock.schedule_interval(self.update_ui, 0.1)
         return root
+
+    def make_panel(self):
+        panel = FloatLayout(size_hint=(1, 1))
+        with panel.canvas.before:
+            Color(0.025, 0.045, 0.10, 0.96)
+            panel.bg_rect = Rectangle(pos=panel.pos, size=panel.size)
+        panel.bind(pos=lambda obj, value: setattr(obj.bg_rect, "pos", value))
+        panel.bind(size=lambda obj, value: setattr(obj.bg_rect, "size", value))
+        return panel
+
+    def build_main_menu(self):
+        self.menu_panel.clear_widgets()
+        title = Label(
+            text="SUPER MARIO", font_size=dp(38), bold=True,
+            color=(1, 0.82, 0.18, 1), size_hint=(0.8, 0.2),
+            pos_hint={"center_x": 0.5, "top": 0.94}
+        )
+        subtitle = Label(
+            text="100 LEVELS  •  3-STAR CHALLENGE",
+            font_size=dp(15), color=(0.82, 0.9, 1, 1),
+            size_hint=(0.8, 0.08), pos_hint={"center_x": 0.5, "top": 0.76}
+        )
+        self.menu_panel.add_widget(title)
+        self.menu_panel.add_widget(subtitle)
+
+        start = Button(
+            text="PLAY", font_size=dp(23), bold=True,
+            size_hint=(0.52, 0.13), pos_hint={"center_x": 0.5, "center_y": 0.58},
+            background_normal="", background_color=(0.12, 0.58, 0.22, 1)
+        )
+        start.bind(on_press=lambda *_: self.start_level(self.game.level))
+        self.menu_panel.add_widget(start)
+
+        levels = Button(
+            text="LEVEL SELECT", font_size=dp(19), bold=True,
+            size_hint=(0.52, 0.12), pos_hint={"center_x": 0.5, "center_y": 0.42},
+            background_normal="", background_color=(0.12, 0.30, 0.68, 1)
+        )
+        levels.bind(on_press=lambda *_: self.show_level_select())
+        self.menu_panel.add_widget(levels)
+
+        self.sound_button = Button(
+            text="SOUND: ON", font_size=dp(15),
+            size_hint=(0.35, 0.09), pos_hint={"center_x": 0.5, "center_y": 0.27},
+            background_normal="", background_color=(0.22, 0.24, 0.32, 1)
+        )
+        self.sound_button.bind(on_press=lambda *_: self.toggle_sound())
+        self.menu_panel.add_widget(self.sound_button)
+
+        best = Label(
+            text=f"BEST SCORE: {self.game.best_score}",
+            font_size=dp(13), color=(0.8, 0.85, 0.95, 1),
+            size_hint=(0.7, 0.06), pos_hint={"center_x": 0.5, "y": 0.04}
+        )
+        self.menu_panel.add_widget(best)
+
+    def build_level_select(self):
+        self.level_panel.clear_widgets()
+        title = Label(
+            text="SELECT LEVEL", font_size=dp(27), bold=True,
+            color=(1, 0.85, 0.25, 1), size_hint=(0.8, 0.13),
+            pos_hint={"center_x": 0.5, "top": 0.98}
+        )
+        self.level_panel.add_widget(title)
+
+        back = Button(
+            text="BACK", font_size=dp(15), size_hint=(0.2, 0.08),
+            pos_hint={"x": 0.04, "y": 0.025},
+            background_normal="", background_color=(0.25, 0.28, 0.38, 1)
+        )
+        back.bind(on_press=lambda *_: self.show_main_menu())
+        self.level_panel.add_widget(back)
+
+        scroll = ScrollView(
+            size_hint=(0.9, 0.72), pos_hint={"center_x": 0.5, "y": 0.14},
+            do_scroll_x=False
+        )
+        grid = GridLayout(
+            cols=5, spacing=dp(7), padding=dp(7),
+            size_hint_y=None
+        )
+        grid.bind(minimum_height=grid.setter("height"))
+        self.level_buttons = []
+        for level in range(1, 101):
+            record = self.game.get_level_record(level)
+            stars = max(0, min(3, int(record.get("stars", 0))))
+            star_text = "★" * stars + "☆" * (3 - stars)
+            unlocked = level <= self.game.unlocked_level
+            button = Button(
+                text=f"{level}\n{star_text}",
+                font_size=dp(13), bold=True,
+                size_hint_y=None, height=dp(62),
+                disabled=not unlocked,
+                opacity=1 if unlocked else 0.38,
+                background_normal="",
+                background_color=(0.12, 0.42, 0.25, 1) if unlocked else (0.18, 0.2, 0.25, 1)
+            )
+            button.bind(on_press=lambda instance, n=level: self.start_level(n))
+            grid.add_widget(button)
+            self.level_buttons.append(button)
+        scroll.add_widget(grid)
+        self.level_panel.add_widget(scroll)
+
+    def refresh_level_grid(self):
+        if not hasattr(self, "level_buttons"):
+            return
+        for level, button in enumerate(self.level_buttons, 1):
+            record = self.game.get_level_record(level)
+            stars = max(0, min(3, int(record.get("stars", 0))))
+            unlocked = level <= self.game.unlocked_level
+            button.text = f"{level}\n{'★' * stars}{'☆' * (3 - stars)}"
+            button.disabled = not unlocked
+            button.opacity = 1 if unlocked else 0.38
+            button.background_color = (
+                (0.12, 0.42, 0.25, 1) if unlocked
+                else (0.18, 0.2, 0.25, 1)
+            )
+
+    def show_main_menu(self):
+        self.game.paused = True
+        self.menu_panel.opacity = 1
+        self.menu_panel.disabled = False
+        self.level_panel.opacity = 0
+        self.level_panel.disabled = True
+        self.refresh_level_grid()
+
+    def show_level_select(self):
+        self.refresh_level_grid()
+        self.menu_panel.opacity = 0
+        self.menu_panel.disabled = True
+        self.level_panel.opacity = 1
+        self.level_panel.disabled = False
+        self.game.paused = True
+
+    def start_level(self, level):
+        self.game.load_level(level)
+        self.game.paused = False
+        self.message.text = ""
+        self.menu_panel.opacity = 0
+        self.menu_panel.disabled = True
+        self.level_panel.opacity = 0
+        self.level_panel.disabled = True
+
+    def toggle_sound(self):
+        self.sound_enabled = not self.sound_enabled
+        self.sound_button.text = "SOUND: ON" if self.sound_enabled else "SOUND: OFF"
+        if self.music:
+            if self.sound_enabled:
+                self.music.play()
+            else:
+                self.music.stop()
+
+    def _write_wave(self, path, notes):
+        sample_rate = 22050
+        frames = bytearray()
+        for frequency, duration in notes:
+            count = int(sample_rate * duration)
+            for i in range(count):
+                if frequency <= 0:
+                    sample = 0
+                else:
+                    t = i / sample_rate
+                    fade = min(1.0, i / 180, (count - i) / 250)
+                    sample = int(6500 * fade * math.sin(2 * math.pi * frequency * t))
+                frames.extend(struct.pack("<h", sample))
+        with wave.open(path, "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(sample_rate)
+            output.writeframes(frames)
+
+    def prepare_audio(self):
+        audio_dir = os.path.join(self.user_data_dir, "audio")
+        os.makedirs(audio_dir, exist_ok=True)
+        melodies = {
+            "jump": [(660, 0.07), (880, 0.09)],
+            "coin": [(990, 0.06), (1320, 0.12)],
+            "stomp": [(180, 0.08), (110, 0.10)],
+            "hurt": [(300, 0.12), (180, 0.18)],
+            "pipe": [(440, 0.12), (330, 0.12), (220, 0.16)],
+            "boss": [(180, 0.08), (260, 0.08), (140, 0.16)],
+            "win": [(523, 0.12), (659, 0.12), (784, 0.12), (1046, 0.24)],
+            "music": [
+                (523, 0.16), (659, 0.16), (784, 0.16), (659, 0.16),
+                (587, 0.16), (698, 0.16), (880, 0.16), (698, 0.16),
+                (523, 0.16), (659, 0.16), (784, 0.16), (1046, 0.24),
+                (784, 0.16), (659, 0.16), (587, 0.16), (494, 0.24)
+            ]
+        }
+        for name, notes in melodies.items():
+            path = os.path.join(audio_dir, name + ".wav")
+            try:
+                if not os.path.exists(path):
+                    self._write_wave(path, notes)
+                sound = SoundLoader.load(path)
+                if sound:
+                    if name == "music":
+                        sound.loop = True
+                        sound.volume = 0.16
+                        self.music = sound
+                    else:
+                        sound.volume = 0.55
+                        self.sounds[name] = sound
+            except Exception:
+                continue
+        if self.music:
+            self.music.play()
+
+    def play_sound(self, name):
+        if not self.sound_enabled:
+            return
+        sound = self.sounds.get(name)
+        if sound:
+            try:
+                sound.stop()
+                sound.play()
+            except Exception:
+                pass
 
     def restart_game(self):
         self.game.restart()
@@ -843,14 +1048,10 @@ class SuperMarioApp(App):
 
     def update_ui(self, dt):
         g = self.game
-
         self.info.text = (
-            f"Score: {g.score}     "
-            f"Best: {g.best_score}     "
-            f"Lives: {g.lives}"
+            f"Score: {g.score}     Best: {g.best_score}     Lives: {g.lives}"
         )
         self.level_label.text = f"LEVEL {g.level} / 100"
-
         level_record = g.get_level_record(g.level)
         saved_stars = max(0, min(3, int(level_record.get("stars", 0))))
         saved_score = int(level_record.get("score", 0))
@@ -859,10 +1060,8 @@ class SuperMarioApp(App):
 
         previous_available = g.level > 1
         next_available = g.level < g.unlocked_level
-
         self.previous_level_button.disabled = not previous_available
         self.previous_level_button.opacity = 1 if previous_available else 0.45
-
         self.next_level_button.disabled = not next_available
         self.next_level_button.opacity = 1 if next_available else 0.45
 
@@ -873,18 +1072,21 @@ class SuperMarioApp(App):
                 if not g.result_saved:
                     g.save_level_result()
                     g.result_saved = True
-
+                    self.refresh_level_grid()
                 if g.level < 100:
                     self.message.text = "LEVEL COMPLETE!"
-
                     if g.unlocked_level < g.level + 1:
                         g.unlocked_level = g.level + 1
                         self.store.put("progress", unlocked=g.unlocked_level)
+                        self.refresh_level_grid()
                 else:
                     self.message.text = "YOU WIN! ALL 100 LEVELS COMPLETE!"
 
     def on_stop(self):
-        self.store.put("record", score=self.game.best_score)
+        if getattr(self, "music", None):
+            self.music.stop()
+        if hasattr(self, "game"):
+            self.store.put("record", score=self.game.best_score)
 
 
 if __name__ == "__main__":
