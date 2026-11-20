@@ -71,6 +71,7 @@ class MarioGame(Widget):
         self.result_saved = False
         self.paused = False
         self.anim_time = 0.0
+        self.facing = 1
         self.pipe_cooldown = 0.0
         self.sound_callback = None
 
@@ -92,6 +93,12 @@ class MarioGame(Widget):
             [(320,210,180,25),(620,330,110,25),(860,160,180,25),(1160,280,110,25),(1420,210,180,25),(1740,330,110,25),(1980,160,180,25),(2300,280,110,25),(2570,190,130,25)]
         ]
         self.platforms.extend(layouts[(self.level - 1) % len(layouts)])
+        layout_rng = random.Random(self.level * 37)
+        for _ in range(2 + self.level % 3):
+            extra_x = layout_rng.randint(260, 2660)
+            extra_y = layout_rng.choice([135, 205, 275, 345])
+            extra_w = layout_rng.choice([90, 110, 135, 160])
+            self.platforms.append((extra_x, extra_y, extra_w, 22))
         self.theme = (self.level - 1) % 4
         self.pipes = [
             [650, 75, 65, 100], [1285, 75, 65, 100],
@@ -269,9 +276,11 @@ class MarioGame(Widget):
 
             if self.left_pressed:
                 self.x_player -= self.speed * dt
+                self.facing = -1
 
             if self.right_pressed:
                 self.x_player += self.speed * dt
+                self.facing = 1
 
             self.x_player = max(
                 0, min(self.WORLD - self.PLAYER_W, self.x_player)
@@ -477,6 +486,14 @@ class MarioGame(Widget):
             (0.35, 0.72, 0.98), (0.95, 0.48, 0.30),
             (0.08, 0.12, 0.28), (0.58, 0.82, 0.94)
         ]
+        ground_colors = [
+            (0.62, 0.30, 0.12), (0.34, 0.20, 0.18),
+            (0.20, 0.25, 0.34), (0.65, 0.78, 0.84)
+        ]
+        top_colors = [
+            (0.18, 0.72, 0.18), (0.82, 0.42, 0.18),
+            (0.22, 0.42, 0.62), (0.82, 0.94, 0.98)
+        ]
         hill_colors = [
             (0.20, 0.68, 0.28), (0.42, 0.28, 0.25),
             (0.10, 0.22, 0.30), (0.68, 0.82, 0.76)
@@ -509,10 +526,10 @@ class MarioGame(Widget):
                 if sx + pw < self.x or sx > self.x + w:
                     continue
 
-                Color(0.62, 0.30, 0.12, 1)
+                Color(*ground_colors[self.theme], 1)
                 Rectangle(pos=(sx, sy), size=(pw, ph))
 
-                Color(0.18, 0.72, 0.18, 1)
+                Color(*top_colors[self.theme], 1)
                 Rectangle(pos=(sx, sy + ph - 10), size=(pw, 10))
 
                 Color(0.35, 0.15, 0.06, 1)
@@ -661,6 +678,8 @@ class MarioGame(Widget):
             ph = self.player_height()
             walking = self.left_pressed or self.right_pressed
             step = math.sin(self.anim_time * 16) * 5 if walking and self.grounded else 0
+            body_bob = abs(math.sin(self.anim_time * 16)) * 2 if walking and self.grounded else math.sin(self.anim_time * 2) * 1.2
+            arm_swing = math.sin(self.anim_time * 16) * 7 if walking and self.grounded else 0
 
             if self.star_time > 0:
                 Color(1, 0.9, 0.1, 0.45)
@@ -671,10 +690,14 @@ class MarioGame(Widget):
             RoundedRectangle(pos=(px + 21, py + max(0, -step)), size=(19, 11), radius=[4])
 
             Color(0.05, 0.25, 0.85, 1)
-            Rectangle(pos=(px + 4, py + 10), size=(31, ph * 0.30))
+            Rectangle(pos=(px + 4, py + 10 + body_bob), size=(31, ph * 0.30))
+
+            Color(1, 0.72, 0.48, 1)
+            Ellipse(pos=(px - 2, py + ph * 0.42 + arm_swing), size=(12, 17))
+            Ellipse(pos=(px + 30, py + ph * 0.42 - arm_swing), size=(12, 17))
 
             Color(0.9, 0.12, 0.08, 1)
-            Rectangle(pos=(px + 2, py + ph * 0.38), size=(35, ph * 0.27))
+            Rectangle(pos=(px + 2, py + ph * 0.38 + body_bob), size=(35, ph * 0.27))
 
             Color(1, 0.72, 0.48, 1)
             Ellipse(pos=(px + 5, py + ph * 0.65), size=(30, 28))
@@ -692,10 +715,11 @@ class MarioGame(Widget):
             )
 
             Color(1, 1, 1, 1)
-            Ellipse(pos=(px + 23, py + ph * 0.65 + 8), size=(6, 9))
+            eye_x = px + (23 if self.facing > 0 else 8)
+            Ellipse(pos=(eye_x, py + ph * 0.65 + 8), size=(6, 9))
 
             Color(0.05, 0.05, 0.05, 1)
-            Ellipse(pos=(px + 26, py + ph * 0.65 + 10), size=(3, 5))
+            Ellipse(pos=(eye_x + (3 if self.facing > 0 else 1), py + ph * 0.65 + 10), size=(3, 5))
 
             gx = self.x + 2920 - cam
             Color(0.25, 0.2, 0.15, 1)
