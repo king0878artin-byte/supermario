@@ -1,5 +1,10 @@
 import os
 import random
+import math
+import struct
+import wave
+
+from kivy.core.audio import SoundLoader
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -9,6 +14,8 @@ from kivy.uix.widget import Widget
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
 from kivy.graphics import (
     Color, Rectangle, Ellipse, Line, RoundedRectangle
 )
@@ -62,6 +69,10 @@ class MarioGame(Widget):
         self.finished = False
         self.game_over = False
         self.result_saved = False
+        self.paused = False
+        self.anim_time = 0.0
+        self.pipe_cooldown = 0.0
+        self.sound_callback = None
 
         self.coins = [
             [340, 205], [390, 205], [570, 305],
@@ -71,19 +82,20 @@ class MarioGame(Widget):
         ]
 
         self.platforms = [
-            (0, 0, 650, 75),
-            (760, 0, 520, 75),
-            (1380, 0, 510, 75),
-            (1990, 0, 1010, 75),
-
-            (300, 160, 140, 25),
-            (520, 260, 150, 25),
-            (850, 170, 150, 25),
-            (1080, 280, 150, 25),
-            (1450, 180, 150, 25),
-            (1700, 280, 150, 25),
-            (2100, 170, 150, 25),
-            (2350, 270, 150, 25),
+            (0, 0, 650, 75), (760, 0, 520, 75),
+            (1380, 0, 510, 75), (1990, 0, 1010, 75)
+        ]
+        layouts = [
+            [(300,160,140,25),(520,260,150,25),(850,170,150,25),(1080,280,150,25),(1450,180,150,25),(1700,280,150,25),(2100,170,150,25),(2350,270,150,25)],
+            [(230,190,120,25),(420,300,130,25),(700,210,150,25),(930,330,130,25),(1190,190,140,25),(1510,300,140,25),(1800,200,150,25),(2150,310,140,25),(2450,190,130,25)],
+            [(260,270,150,25),(510,170,130,25),(780,300,150,25),(1050,190,130,25),(1320,310,150,25),(1600,190,140,25),(1880,300,140,25),(2180,180,150,25),(2460,300,140,25)],
+            [(320,210,180,25),(620,330,110,25),(860,160,180,25),(1160,280,110,25),(1420,210,180,25),(1740,330,110,25),(1980,160,180,25),(2300,280,110,25),(2570,190,130,25)]
+        ]
+        self.platforms.extend(layouts[(self.level - 1) % len(layouts)])
+        self.theme = (self.level - 1) % 4
+        self.pipes = [
+            [650, 75, 65, 100], [1285, 75, 65, 100],
+            [1895, 75, 65, 100], [2540, 75, 65, 100]
         ]
 
         self.blocks = [
@@ -119,6 +131,35 @@ class MarioGame(Widget):
             self.coins.append([coin_x, coin_y])
 
         self.mushroom = []
+
+        turtle_spots = [720, 1380, 1980, 2500]
+        self.turtles = []
+        for index, tx in enumerate(turtle_spots[:min(1 + self.level // 8, 4)]):
+            self.turtles.append([tx, 75, 1 if index % 2 == 0 else -1, True, tx - 90, tx + 90, False])
+
+        self.boss = None
+        if self.level % 10 == 0:
+            self.boss = {"x": 2700, "y": 75, "direction": -1, "hp": 3, "alive": True}
+
+    def play_sound(self, name):
+        if self.sound_callback:
+            self.sound_callback(name)
+
+    def enter_pipe(self):
+        if self.finished or self.paused or self.pipe_cooldown > 0 or not self.grounded:
+            return
+        center = self.x_player + self.PLAYER_W / 2
+        for index, pipe in enumerate(self.pipes):
+            px, py, pw, ph = pipe
+            if px - 28 <= center <= px + pw + 28 and abs(self.y_player - py) < 18:
+                destination = self.pipes[(index + 1) % len(self.pipes)][0] + 85
+                self.x_player = min(self.WORLD - 100, destination)
+                self.y_player = 75
+                self.vy = 0
+                self.camera = max(0, min(self.WORLD - self.width, self.x_player - self.width * 0.38))
+                self.pipe_cooldown = 1.0
+                self.play_sound("pipe")
+                return
 
     def add_score(self, amount):
         self.score += amount
@@ -163,6 +204,7 @@ class MarioGame(Widget):
         if self.grounded and not self.finished and not self.game_over:
             self.vy = self.jump_power
             self.grounded = False
+            self.play_sound("jump")
 
     def player_height(self):
         return 95 if self.big else self.NORMAL_H
@@ -173,6 +215,7 @@ class MarioGame(Widget):
 
         self.lives -= 1
         self.invincible_time = 1.5
+        self.play_sound("hurt")
 
         if self.lives <= 0:
             self.game_over = True
@@ -214,11 +257,14 @@ class MarioGame(Widget):
 
         dt = min(dt, 0.033)
 
-        if not self.finished:
+        if not self.finished and not self.paused:
+            self.anim_time += dt
+            self.pipe_cooldown = max(0.0, self.pipe_cooldown - dt)
             self.invincible_time = max(0, self.invincible_time - dt)
             self.star_time = max(0, self.star_time - dt)
 
             old_y = self.y_player
+            old_x = self.x_player
             old_top = old_y + self.player_height()
 
             if self.left_pressed:
@@ -248,6 +294,20 @@ class MarioGame(Widget):
                     self.y_player = py + ph
                     self.vy = 0
                     self.grounded = True
+
+            # Solid pipe bodies and walkable pipe rims.
+            for pipe in self.pipes:
+                px, py, pw, ph = pipe
+                horizontal_overlap = self.x_player + self.PLAYER_W > px and self.x_player < px + pw
+                if horizontal_overlap and self.vy <= 0 and old_y >= py + ph - 8 and self.y_player <= py + ph:
+                    self.y_player = py + ph
+                    self.vy = 0
+                    self.grounded = True
+                elif horizontal_overlap and self.y_player < py + ph and self.y_player + height > py:
+                    if old_x + self.PLAYER_W <= px:
+                        self.x_player = px - self.PLAYER_W
+                    elif old_x >= px + pw:
+                        self.x_player = px + pw
 
             new_top = self.y_player + height
 
@@ -293,11 +353,13 @@ class MarioGame(Widget):
                     if self.star_time > 0:
                         enemy[3] = False
                         self.add_score(200)
+                        self.play_sound("stomp")
 
                     elif self.vy < 0 and old_y >= ey + 25:
                         enemy[3] = False
                         self.vy = 360
                         self.add_score(200)
+                        self.play_sound("stomp")
 
                     else:
                         self.lose_life()
@@ -335,6 +397,7 @@ class MarioGame(Widget):
                     and abs(self.y_player + height / 2 - cy) < 40
                 ):
                     self.add_score(100)
+                    self.play_sound("coin")
                 else:
                     remaining_coins.append(coin)
 
@@ -343,8 +406,58 @@ class MarioGame(Widget):
             if self.y_player < -150:
                 self.lose_life()
 
-            if self.x_player > 2880:
+            # Turtle patrols and shell stomps.
+            for turtle in self.turtles:
+                tx, ty, direction, alive, left_edge, right_edge, shelled = turtle
+                if not alive:
+                    continue
+                turtle[0] += direction * (65 if shelled else 82 + min(self.level, 30)) * dt
+                if turtle[0] < left_edge or turtle[0] > right_edge:
+                    turtle[2] *= -1
+                overlap_x = self.x_player + self.PLAYER_W > turtle[0] and self.x_player < turtle[0] + 46
+                overlap_y = self.y_player < ty + 42 and self.y_player + height > ty
+                if overlap_x and overlap_y:
+                    if self.star_time > 0:
+                        turtle[3] = False
+                        self.add_score(350)
+                    elif self.vy < 0 and old_y >= ty + 25:
+                        if not shelled:
+                            turtle[6] = True
+                            self.vy = 390
+                            self.add_score(250)
+                            self.play_sound("stomp")
+                        else:
+                            turtle[3] = False
+                            self.add_score(400)
+                    else:
+                        self.lose_life()
+
+            if self.boss and self.boss["alive"]:
+                boss = self.boss
+                boss["x"] += boss["direction"] * (55 + self.level) * dt
+                if boss["x"] < 2550 or boss["x"] > 2800:
+                    boss["direction"] *= -1
+                boss_overlap = (self.x_player + self.PLAYER_W > boss["x"] and self.x_player < boss["x"] + 76 and self.y_player < boss["y"] + 72 and self.y_player + height > boss["y"])
+                if boss_overlap:
+                    if self.vy < 0 and old_y >= boss["y"] + 48:
+                        boss["hp"] -= 1
+                        self.vy = 470
+                        self.add_score(500)
+                        self.play_sound("boss")
+                        if boss["hp"] <= 0:
+                            boss["alive"] = False
+                            self.add_score(1500)
+                    elif self.star_time > 0:
+                        boss["hp"] -= 1
+                        if boss["hp"] <= 0:
+                            boss["alive"] = False
+                        self.add_score(250)
+                    else:
+                        self.lose_life()
+
+            if self.x_player > 2880 and not (self.boss and self.boss["alive"]):
                 self.finished = True
+                self.play_sound("win")
 
             self.camera = max(
                 0,
@@ -398,18 +511,15 @@ class MarioGame(Widget):
                 for bx in range(int(sx), int(sx + pw), 45):
                     Line(points=[bx, sy + 3, bx, sy + ph - 10], width=1)
 
-            for pipe_x in [650, 1285, 1895, 2540]:
+            for pipe_x, pipe_y, pipe_w, pipe_h in self.pipes:
                 sx = self.x + pipe_x - cam
-
                 if -100 < sx - self.x < w + 100:
                     Color(0.04, 0.48, 0.12, 1)
-                    Rectangle(pos=(sx, self.y + 75), size=(65, 100))
-
+                    Rectangle(pos=(sx, self.y + pipe_y), size=(pipe_w, pipe_h))
                     Color(0.12, 0.75, 0.2, 1)
-                    Rectangle(pos=(sx - 8, self.y + 160), size=(81, 20))
-
+                    Rectangle(pos=(sx - 8, self.y + pipe_y + pipe_h - 15), size=(pipe_w + 16, 20))
                     Color(0.02, 0.32, 0.07, 1)
-                    Line(rectangle=(sx, self.y + 75, 65, 100), width=2)
+                    Line(rectangle=(sx, self.y + pipe_y, pipe_w, pipe_h), width=2)
 
             for bx, by, kind, used in self.blocks:
                 sx = self.x + bx - cam
@@ -499,17 +609,58 @@ class MarioGame(Widget):
                 Ellipse(pos=(sx + 10, sy + 21), size=(4, 5))
                 Ellipse(pos=(sx + 27, sy + 21), size=(4, 5))
 
+            for tx, ty, direction, alive, left_edge, right_edge, shelled in self.turtles:
+                if alive:
+                    sx = self.x + tx - cam
+                    sy = self.y + ty
+                    Color(0.12, 0.48, 0.20, 1)
+                    Ellipse(pos=(sx, sy + 5), size=(46, 34))
+                    Color(0.10, 0.28, 0.12, 1)
+                    Ellipse(pos=(sx + 5, sy + 2), size=(36, 27))
+                    Color(0.9, 0.78, 0.48, 1)
+                    Ellipse(pos=(sx + (31 if direction > 0 else -3), sy + 13), size=(18, 17))
+                    Color(1, 1, 1, 1)
+                    Ellipse(pos=(sx + (40 if direction > 0 else 1), sy + 22), size=(5, 6))
+                    Color(0.05, 0.05, 0.05, 1)
+                    Ellipse(pos=(sx + (42 if direction > 0 else 2), sy + 24), size=(2, 3))
+                    if shelled:
+                        Color(0.95, 0.8, 0.2, 1)
+                        Line(ellipse=(sx + 7, sy + 7, 31, 26), width=1.5)
+
+            if self.boss and self.boss["alive"]:
+                bx = self.x + self.boss["x"] - cam
+                by = self.y + self.boss["y"]
+                Color(0.55, 0.12, 0.08, 1)
+                Ellipse(pos=(bx, by), size=(76, 66))
+                Color(0.18, 0.34, 0.12, 1)
+                Ellipse(pos=(bx + 10, by + 25), size=(56, 37))
+                Color(0.95, 0.72, 0.25, 1)
+                Ellipse(pos=(bx + 52, by + 32), size=(23, 20))
+                Color(1, 1, 1, 1)
+                Ellipse(pos=(bx + 58, by + 44), size=(7, 8))
+                Color(0.05, 0.05, 0.05, 1)
+                Ellipse(pos=(bx + 61, by + 47), size=(3, 4))
+                Color(1, 0.2, 0.12, 1)
+                for spike_x in (bx + 16, bx + 34, bx + 50):
+                    Line(points=[spike_x, by + 57, spike_x + 8, by + 77, spike_x + 15, by + 57], width=2)
+                Color(1, 1, 1, 1)
+                Line(points=[bx + 5, by + 82, bx + 76, by + 82], width=3)
+                Color(0.9, 0.1, 0.08, 1)
+                Rectangle(pos=(bx + 5, by + 82), size=(71 * self.boss["hp"] / 3, 5))
+
             px = self.x + self.x_player - cam
             py = self.y + self.y_player
             ph = self.player_height()
+            walking = self.left_pressed or self.right_pressed
+            step = math.sin(self.anim_time * 16) * 5 if walking and self.grounded else 0
 
             if self.star_time > 0:
                 Color(1, 0.9, 0.1, 0.45)
                 Ellipse(pos=(px - 12, py - 8), size=(65, ph + 25))
 
             Color(0.25, 0.09, 0.04, 1)
-            RoundedRectangle(pos=(px - 3, py), size=(19, 11), radius=[4])
-            RoundedRectangle(pos=(px + 21, py), size=(19, 11), radius=[4])
+            RoundedRectangle(pos=(px - 3, py + max(0, step)), size=(19, 11), radius=[4])
+            RoundedRectangle(pos=(px + 21, py + max(0, -step)), size=(19, 11), radius=[4])
 
             Color(0.05, 0.25, 0.85, 1)
             Rectangle(pos=(px + 4, py + 10), size=(31, ph * 0.30))
@@ -522,6 +673,8 @@ class MarioGame(Widget):
 
             Color(0.22, 0.10, 0.04, 1)
             Rectangle(pos=(px + 5, py + ph * 0.65 + 21), size=(30, 7))
+            Color(0.95, 0.12, 0.08, 1)
+            Ellipse(pos=(px + 1, py + ph * 0.65 + 22), size=(38, 18))
 
             Color(0.12, 0.35, 0.85, 1)
             RoundedRectangle(
